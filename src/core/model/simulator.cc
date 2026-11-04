@@ -187,6 +187,8 @@ Simulator::Run()
 void
 Simulator::PreRun()
 {
+    // Match Run(): the time resolution is fixed before stepping events.
+    Time::ClearMarkedTimes();
     auto* impl = GetImpl();
     auto* d = dynamic_cast<DefaultSimulatorImpl*>(impl);
     NS_ASSERT_MSG(d != nullptr, "Simulator::PreRun is only available with DefaultSimulatorImpl");

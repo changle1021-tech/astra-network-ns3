@@ -168,7 +168,9 @@ uint64_t RdmaQueuePair::GetWin(){
 		return 0;
 	uint64_t w;
 	if (m_var_win){
-		w = m_win * m_rate.GetBitRate() / m_max_rate.GetBitRate();
+		w = static_cast<uint64_t>(
+			static_cast<__uint128_t>(m_win) * m_rate.GetBitRate() /
+			m_max_rate.GetBitRate());
 		if (w == 0)
 			w = 1; // must > 0
 	}else{
@@ -182,7 +184,9 @@ uint64_t RdmaQueuePair::HpGetCurWin(){
 		return 0;
 	uint64_t w;
 	if (m_var_win){
-		w = m_win * hp.m_curRate.GetBitRate() / m_max_rate.GetBitRate();
+		w = static_cast<uint64_t>(
+			static_cast<__uint128_t>(m_win) * hp.m_curRate.GetBitRate() /
+			m_max_rate.GetBitRate());
 		if (w == 0)
 			w = 1; // must > 0
 	}else{

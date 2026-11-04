@@ -105,6 +105,7 @@ std::unordered_map<uint32_t, unordered_map<uint32_t, uint16_t>> portNumber;
 
 struct Interface {
   uint32_t idx;
+  std::vector<uint32_t> ports;
   bool up;
   uint64_t delay;
   uint64_t bw;
@@ -155,6 +156,7 @@ struct QlenDistribution {
 };
 map<uint32_t, map<uint32_t, uint32_t>> queue_result;
 void monitor_buffer(FILE *qlen_output, NodeContainer *n) {
+  if (Simulator::Now().GetNanoSeconds() >= qlen_mon_end) return;
   for (uint32_t i = 0; i < n->GetN(); i++) {
     if (n->Get(i)->GetNodeType() == 1) { // is switch
       Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(n->Get(i));
@@ -202,8 +204,11 @@ void monitor_buffer(FILE *qlen_output, NodeContainer *n) {
     }
   }
   fflush(qlen_output);
-  Simulator::Schedule(NanoSeconds(qlen_mon_interval), &monitor_buffer,
-                      qlen_output, n);
+  // Monitoring must not keep an idle serving simulation busy after its window.
+  if (Simulator::Now().GetNanoSeconds() + qlen_mon_interval < qlen_mon_end) {
+    Simulator::Schedule(NanoSeconds(qlen_mon_interval), &monitor_buffer,
+                        qlen_output, n);
+  }
 }
 
 void CalculateRoute(Ptr<Node> host) {
@@ -275,12 +280,19 @@ void SetRoutingEntries() {
       vector<Ptr<Node>> nexts = j->second;
       for (int k = 0; k < (int)nexts.size(); k++) {
         Ptr<Node> next = nexts[k];
-        uint32_t interface = nbr2if[node][next].idx;
-        if (node->GetNodeType() == 1)
-          DynamicCast<SwitchNode>(node)->AddTableEntry(dstAddr, interface);
-        else {
-          node->GetObject<RdmaDriver>()->m_rdma->AddTableEntry(dstAddr,
-                                                               interface);
+        const auto &ports = nbr2if[node][next].ports;
+        for (uint32_t interface : ports) {
+          if (node->GetNodeType() == 1)
+            DynamicCast<SwitchNode>(node)->AddTableEntry(dstAddr, interface);
+          else {
+            node->GetObject<RdmaDriver>()->m_rdma->AddTableEntry(dstAddr,
+                                                             interface);
+          }
+        }
+        if (ports.size() > 1) {
+          std::cout << "ns3 parallel route src=" << node->GetId()
+                    << " dst=" << dst->GetId() << " via=" << next->GetId()
+                    << " ports=" << ports.size() << std::endl;
         }
       }
     }
@@ -302,8 +314,10 @@ void TakeDownLink(NodeContainer n, Ptr<Node> a, Ptr<Node> b) {
     else
       n.Get(i)->GetObject<RdmaDriver>()->m_rdma->ClearTable();
   }
-  DynamicCast<QbbNetDevice>(a->GetDevice(nbr2if[a][b].idx))->TakeDown();
-  DynamicCast<QbbNetDevice>(b->GetDevice(nbr2if[b][a].idx))->TakeDown();
+  for (uint32_t port : nbr2if[a][b].ports)
+    DynamicCast<QbbNetDevice>(a->GetDevice(port))->TakeDown();
+  for (uint32_t port : nbr2if[b][a].ports)
+    DynamicCast<QbbNetDevice>(b->GetDevice(port))->TakeDown();
   // reset routing table
   SetRoutingEntries();
 
@@ -662,6 +676,7 @@ bool SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>)) {
     // used to create a graph of the topology
     nbr2if[snode][dnode].idx =
         DynamicCast<QbbNetDevice>(d.Get(0))->GetIfIndex();
+    nbr2if[snode][dnode].ports.push_back(nbr2if[snode][dnode].idx);
     nbr2if[snode][dnode].up = true;
     nbr2if[snode][dnode].delay =
         DynamicCast<QbbChannel>(
@@ -672,6 +687,7 @@ bool SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>)) {
         DynamicCast<QbbNetDevice>(d.Get(0))->GetDataRate().GetBitRate();
     nbr2if[dnode][snode].idx =
         DynamicCast<QbbNetDevice>(d.Get(1))->GetIfIndex();
+    nbr2if[dnode][snode].ports.push_back(nbr2if[dnode][snode].idx);
     nbr2if[dnode][snode].up = true;
     nbr2if[dnode][snode].delay =
         DynamicCast<QbbChannel>(
@@ -860,12 +876,14 @@ bool SetupNetwork(void (*qp_finish)(FILE *, Ptr<RdmaQueuePair>)) {
     for (auto i : nbr2if) {
       for (auto j : i.second) {
         uint16_t node = i.first->GetId();
-        uint8_t intf = j.second.idx;
-        uint64_t bps =
-            DynamicCast<QbbNetDevice>(i.first->GetDevice(j.second.idx))
-                ->GetDataRate()
-                .GetBitRate();
-        sim_setting.port_speed[node][intf] = bps;
+        for (uint32_t port : j.second.ports) {
+          uint8_t intf = port;
+          uint64_t bps =
+              DynamicCast<QbbNetDevice>(i.first->GetDevice(port))
+                  ->GetDataRate()
+                  .GetBitRate();
+          sim_setting.port_speed[node][intf] = bps;
+        }
       }
     }
     sim_setting.win = maxBdp;
